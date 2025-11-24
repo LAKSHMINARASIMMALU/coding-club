@@ -1,4 +1,11 @@
 "use client";
+import img1 from '@/images/code1.png';
+import img2 from '@/images/code2.png';
+import img3 from '@/images/code3.png';
+
+const codingImages = [img1, img2, img3];
+const img = codingImages[Math.floor(Math.random() * codingImages.length)];
+
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -74,11 +81,14 @@ export default function Dashboard() {
               >
                 <div className="relative h-48 w-full">
                   <Image
-                    src={`https://picsum.photos/seed/${contest.id}/600/400`}
-                    alt={contest.name}
-                    layout="fill"
-                    objectFit="cover"
-                  />
+  src={img}
+  alt={contest.name}
+  fill
+  className="object-cover"
+/>
+
+
+
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                 </div>
                 <CardHeader>
