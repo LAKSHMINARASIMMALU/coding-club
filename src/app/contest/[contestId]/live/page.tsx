@@ -1,6 +1,9 @@
+// File: app/(contest)/live/[contestId]/page.tsx
+// or wherever your LiveContestPage lives
+
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   doc,
@@ -12,6 +15,7 @@ import {
   addDoc,
   serverTimestamp,
   setDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/use-auth";
@@ -31,10 +35,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-/*
- Screenshot for reference (uploaded):
- /mnt/data/Screenshot 2025-11-21 132412.png
-*/
+/* ---------------------------
+   (Helpers, input parsing, code runner, etc.)
+   Paste your original helper implementations here unchanged.
+   I include the helpers you previously provided (sanitizeParamName, generateDefaultCode,
+   parseSampleInputToArgs, runCode, buildWrapperForLanguage, etc.)
+   (Full helper code included verbatim below)
+   --------------------------- */
 
 /* ---------------------------
    Fallback defaults for compiled langs
@@ -60,24 +67,18 @@ public class Main {
 }`,
 };
 
-/* ---------------------------
-   Helper: param sanitization & type mapping & default code generator
-   --------------------------- */
 function sanitizeParamName(name?: string, idx = 0) {
   if (!name) return `p${idx + 1}`;
   let s = String(name).trim();
-  // replace invalid identifier chars with underscore, trim edges
   try {
     s = s.replace(/[^\p{L}\p{N}_]+/gu, "_").replace(/^_+|_+$/g, "");
   } catch {
-    // fallback if Unicode regex unsupported in environment
     s = s.replace(/[^a-zA-Z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
   }
   if (/^[0-9]/.test(s)) s = "_" + s;
   if (!s) return `p${idx + 1}`;
   return s;
 }
-
 function mapTypeToJsDoc(type?: string) {
   if (!type) return "any";
   const t = type.toLowerCase();
@@ -88,7 +89,6 @@ function mapTypeToJsDoc(type?: string) {
   if (t === "array" || t === "list") return "Array";
   return "any";
 }
-
 function mapTypeToPythonHint(type?: string) {
   if (!type) return "Any";
   const t = type.toLowerCase();
@@ -99,13 +99,6 @@ function mapTypeToPythonHint(type?: string) {
   if (t === "array" || t === "list") return "list";
   return "Any";
 }
-
-/**
- * Generate starter code according to language and admin inputs.
- * - JS: JSDoc @param types
- * - Python: type hints + optional Any import
- * - Fallback for compiled langs uses `fallbackDefaultCode`
- */
 function generateDefaultCode(language: string, inputsMeta: any[] = []) {
   const params =
     inputsMeta && inputsMeta.length > 0
@@ -124,7 +117,6 @@ function generateDefaultCode(language: string, inputsMeta: any[] = []) {
     return `${jsdoc}
 function solve(${params.join(", ")}) {
   // write your logic here
-  // Example: return ${params[0]}${params[1] ? " + " + params[1] : ""};
 }`;
   }
 
@@ -139,7 +131,6 @@ function solve(${params.join(", ")}) {
     # write your logic here `;
   }
 
-  // compiled languages fallback
   if (language === "cpp") return fallbackDefaultCode.cpp;
   if (language === "c") return fallbackDefaultCode.c;
   if (language === "java") return fallbackDefaultCode.java;
@@ -149,9 +140,6 @@ function solve(${params.join(", ")}) {
 }`;
 }
 
-/* ---------------------------
-   Helpers: parsing sample input tokens and converting to literals
-   --------------------------- */
 function parseTokenToValue(token: string, type?: string) {
   const t = (type || "").toLowerCase();
   if (t === "int" || t === "long" || t === "number") {
@@ -186,15 +174,12 @@ function parseTokenToValue(token: string, type?: string) {
     return token;
   }
 }
-
 function toJSLiteral(value: any) {
   return JSON.stringify(value);
 }
-
 function toPythonLiteral(value: any) {
   if (value === null) return "None";
   if (Array.isArray(value) || typeof value === "object") {
-    // We'll inject using json.loads('<json>') in wrapper when needed.
     return JSON.stringify(value);
   }
   if (typeof value === "string") {
@@ -204,11 +189,9 @@ function toPythonLiteral(value: any) {
   if (typeof value === "boolean") return value ? "True" : "False";
   return String(value);
 }
-
 function parseSampleInputToArgs(sampleInputStr: string, inputsMeta: any[] = []) {
   const s = (sampleInputStr ?? "").trim();
   if (s === "") {
-    // fallback to examples in metadata
     return inputsMeta.map((m) => parseTokenToValue(String(m?.example ?? ""), m?.type));
   }
 
@@ -253,9 +236,6 @@ function parseSampleInputToArgs(sampleInputStr: string, inputsMeta: any[] = []) 
   });
 }
 
-/* ---------------------------
-   Piston call helper and output extraction
-   --------------------------- */
 async function runCode(language: string, code: string, stdin = "") {
   const res = await fetch("/api/execute", {
     method: "POST",
@@ -266,16 +246,12 @@ async function runCode(language: string, code: string, stdin = "") {
   if (!res.ok) throw new Error(data.error || "Execution failed");
   return data;
 }
-
 const extractOutputFromPiston = (result: any) => {
   const run = result?.run ?? result;
   const out = run?.output ?? run?.stdout ?? run?.stderr ?? "";
   return String(out ?? "");
 };
 
-/* ---------------------------
-   Utility: sample input/output array normalization
-   --------------------------- */
 function getSamplePairsFromQuestion(q: Question) {
   const inputsArr: string[] = Array.isArray((q as any).sampleInputs)
     ? (q as any).sampleInputs
@@ -287,9 +263,6 @@ function getSamplePairsFromQuestion(q: Question) {
   return { inputsArr, outputsArr };
 }
 
-/* ---------------------------
-   Wrapper builder: injects named params and calls solve(...)
-   --------------------------- */
 function buildWrapperForLanguage(
   lang: string,
   userCode: string,
@@ -307,7 +280,7 @@ function buildWrapperForLanguage(
       .map((name, i) => `const ${name} = ${toJSLiteral(args[i])};`)
       .join("\n");
     const callArgs = paramNames.join(", ");
-    const wrapped = `\n${userCode}\n${declarations}\n(solve(${callArgs});\n`;
+    const wrapped = `\n${userCode}\n${declarations}\nconsole.log(JSON.stringify(solve(${callArgs})));`;
     return { code: wrapped, stdin: "" };
   }
 
@@ -325,16 +298,16 @@ function buildWrapperForLanguage(
       })
       .join("\n");
     const callArgs = paramNames.join(", ");
-    const wrapped = `\n${imports}${userCode}\n${declarations}\nsolve(${callArgs})\n`;
+    const wrapped = `\n${imports}${userCode}\n${declarations}\nprint(solve(${callArgs}))\n`;
     return { code: wrapped, stdin: "" };
   }
 
-  // compiled languages: pass stdin directly
+  // compiled languages: pass stdin directly and assume user code reads input
   return { code: userCode, stdin: sampleInputStr };
 }
 
 /* ---------------------------
-   UI Component
+   UI Component (full)
    --------------------------- */
 
 type TestResult = {
@@ -346,7 +319,6 @@ type TestResult = {
   error?: string | null;
 };
 
-// small helpers for solved persistence
 function solvedStorageKey(contestId: string, userId?: string) {
   return `contest_solved:${contestId}:${userId ?? "anon"}`;
 }
@@ -370,7 +342,6 @@ export default function LiveContestPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const levelParam = searchParams?.get("level");
-  // if levelParam === 'other' handle separately, otherwise try parse to number
   const selectedLevel = levelParam === "other" ? "other" : levelParam ? Number(levelParam) : null;
   const { user } = useAuth();
   const { toast } = useToast();
@@ -389,15 +360,12 @@ export default function LiveContestPage() {
   const [isContestOver, setIsContestOver] = useState(false);
   const [testResults, setTestResults] = useState<TestResult[] | null>(null);
 
-  // --- group questions by level (display three divisions) ---
-  // We'll arrange questions into Level 1, Level 2, Level 3 buckets. Questions with other levels go into "Other".
   const levelOrder = [1, 2, 3];
   const groupedQuestions = levelOrder.map((lvl) => ({
     level: lvl,
     items: questions.filter((q) => Number(q?.level) === lvl),
   }));
   const otherQuestions = questions.filter((q) => !levelOrder.includes(Number(q?.level)));
-
 
   const lockContest = useCallback(async () => {
     if (!user || isContestOver) return;
@@ -416,30 +384,6 @@ export default function LiveContestPage() {
   }, [lockContest, router, toast]);
 
   useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) {
-        toast({
-          title: "Warning",
-          description:
-            "Switching tabs is discouraged. Leaving the page will end your contest.",
-        });
-      }
-    };
-    window.addEventListener("visibilitychange", handleVisibility);
-
-    const handleBeforeUnload = async (e: BeforeUnloadEvent) => {
-      await lockContest();
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-    };
-  }, [lockContest, toast]);
-
-  useEffect(() => {
     if (!contestId) return;
     (async () => {
       setIsLoading(true);
@@ -453,7 +397,6 @@ export default function LiveContestPage() {
         );
         const list = qSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Question[];
 
-        // If a level is specified in the URL (e.g. ?level=1 or ?level=other), filter questions
         let filtered: Question[] = list;
         if (selectedLevel !== null) {
           if (selectedLevel === "other") {
@@ -466,7 +409,6 @@ export default function LiveContestPage() {
         setQuestions(filtered);
         if (filtered.length) setActiveQuestion(filtered[0]);
 
-        // restore solved from local
         const localSolved = loadSolvedFromLocal(contestId, user?.uid);
         if (localSolved && localSolved.length) setSolved(localSolved);
       } catch (err) {
@@ -476,16 +418,335 @@ export default function LiveContestPage() {
         setIsLoading(false);
       }
     })();
-  }, [contestId, router, toast]);
+  }, [contestId, router, toast, selectedLevel, user?.uid]);
 
-  // regenerate starter code when language or activeQuestion changes
   useEffect(() => {
     const inputsMeta = Array.isArray(activeQuestion?.inputs) ? activeQuestion!.inputs : [];
     const generated = generateDefaultCode(language, inputsMeta);
     setCode(generated);
   }, [language, activeQuestion]);
 
-  // Run single sample (first)
+  //
+  // IMPORTANT: single tabId shared by heartbeat & proctoring
+  //
+  const sharedTabIdRef = { current: "" } as { current: string };
+  useEffect(() => {
+    if (!sharedTabIdRef.current) {
+      sharedTabIdRef.current =
+        typeof crypto !== "undefined" && (crypto as any).randomUUID
+          ? (crypto as any).randomUUID()
+          : `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    }
+  }, []); // run once
+
+  // Heartbeat + BroadcastChannel
+  useEffect(() => {
+    if (!contestId || !user) return;
+
+    const tabId = sharedTabIdRef.current;
+    const HEARTBEAT_INTERVAL_MS = 5000; // 5s
+    const PRESENCE_CHANNEL = "contest-presence";
+    const PRESENCE_PREFIX = `contest_presence:${contestId}:${user.uid}:`;
+
+    let heartbeatTimer: number | null = null;
+    let bc: BroadcastChannel | null = null;
+
+    const sendHeartbeat = async () => {
+      try {
+        const idToken = typeof (user as any).getIdToken === "function" ? await (user as any).getIdToken() : null;
+        await fetch("/api/heartbeat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+          },
+          body: JSON.stringify({ contestId, userId: user.uid, tabId }),
+          keepalive: true,
+        });
+      } catch (err) {
+        console.error("heartbeat failed", err);
+      }
+    };
+
+    const announceOpen = () => {
+      try {
+        if (typeof BroadcastChannel !== "undefined") {
+          if (!bc) bc = new BroadcastChannel(PRESENCE_CHANNEL);
+          bc.postMessage({ type: "open", contestId, userId: user.uid, tabId, ts: Date.now() });
+        } else {
+          localStorage.setItem(PRESENCE_PREFIX + tabId, JSON.stringify({ type: "open", ts: Date.now(), tabId }));
+        }
+      } catch (e) {}
+    };
+
+    const onBeforeUnload = () => {
+      try {
+        const payload = JSON.stringify({ contestId, userId: user.uid, tabId });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon("/api/heartbeat-end", payload);
+        } else {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/heartbeat-end", false);
+          xhr.setRequestHeader("Content-Type", "application/json");
+          xhr.send(payload);
+        }
+      } catch (e) {}
+    };
+
+    const onBcMessage = async (ev: MessageEvent) => {
+      try {
+        const msg = ev.data;
+        if (!msg || msg.contestId !== contestId) return;
+        if (msg.userId === user.uid && msg.tabId !== tabId) {
+          toast({
+            title: "Another tab detected",
+            description: "This contest is also open in another tab. Locking contest and disabling this tab.",
+          });
+          setIsContestOver(true);
+          try { await lockContest(); } catch (e) { console.error(e); }
+          router.replace("/dashboard");
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    const onStorage = async (ev: StorageEvent) => {
+      if (!ev.key) return;
+      try {
+        if (ev.key.startsWith(PRESENCE_PREFIX) && ev.newValue) {
+          const parsed = JSON.parse(ev.newValue);
+          if (parsed && parsed.tabId && parsed.tabId !== tabId) {
+            toast({
+              title: "Another tab detected (storage)",
+              description: "Locking contest and disabling this tab.",
+            });
+            setIsContestOver(true);
+            try { await lockContest(); } catch (e) { console.error(e); }
+            router.replace("/dashboard");
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    announceOpen();
+    sendHeartbeat();
+    heartbeatTimer = window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        bc = new BroadcastChannel(PRESENCE_CHANNEL);
+        bc.addEventListener("message", onBcMessage);
+      } else {
+        window.addEventListener("storage", onStorage);
+      }
+    } catch (e) {
+      window.addEventListener("storage", onStorage);
+    }
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    return () => {
+      try {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        if (bc) {
+          bc.postMessage({ type: "close", contestId, userId: user.uid, tabId, ts: Date.now() });
+          bc.removeEventListener("message", onBcMessage);
+          bc.close();
+        } else {
+          localStorage.removeItem(PRESENCE_PREFIX + tabId);
+          window.removeEventListener("storage", onStorage);
+        }
+        window.removeEventListener("beforeunload", onBeforeUnload);
+        try {
+          const payload = JSON.stringify({ contestId, userId: user.uid, tabId });
+          if (navigator.sendBeacon) navigator.sendBeacon("/api/heartbeat-end", payload);
+        } catch (e) {}
+      } catch (e) {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contestId, user]);
+
+  // Proctoring listeners (re-uses sharedTabIdRef.current)
+  useEffect(() => {
+    if (!contestId || !user) return;
+    const tabId = sharedTabIdRef.current;
+
+    const MAX_VIOLATIONS = 3;
+    const RESIZE_THRESHOLD_PX = 150;
+    const MAX_FAST_RESIZES = 3;
+    const FAST_RESIZE_WINDOW_MS = 5000;
+
+    let violationCount = 0;
+    let lastVisibilityHiddenAt: number | null = null;
+    let resizeEvents: number[] = [];
+    let closed = false;
+
+    const sendViolationToServer = async (type: string, detail?: string) => {
+      try {
+        const idToken = typeof (user as any).getIdToken === "function" ? await (user as any).getIdToken() : null;
+        await fetch("/api/violation", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+          },
+          body: JSON.stringify({
+            contestId,
+            userId: user.uid,
+            tabId,
+            type,
+            detail,
+            ts: Date.now(),
+          }),
+          keepalive: true,
+        });
+      } catch (err) {
+        console.error("violation log failed", err);
+      }
+    };
+
+    const incrViolation = async (type: string, detail?: string) => {
+      violationCount += 1;
+      try {
+        toast({
+          title: "Suspicious activity detected",
+          description: `${type} ${violationCount >= MAX_VIOLATIONS ? "- locking contest" : `(violation ${violationCount}/${MAX_VIOLATIONS})`}`,
+        });
+      } catch {}
+      await sendViolationToServer(type, detail);
+
+      if (violationCount >= MAX_VIOLATIONS) {
+        try {
+          setIsContestOver(true);
+          await lockContest();
+        } catch (e) {
+          console.error("lockContest on violation failed", e);
+        } finally {
+          try { router.replace("/dashboard"); } catch {}
+        }
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        lastVisibilityHiddenAt = Date.now();
+        incrViolation("visibility_hidden", "Tab became hidden or minimized");
+      } else {
+        const leftFor = lastVisibilityHiddenAt ? Date.now() - lastVisibilityHiddenAt : 0;
+        lastVisibilityHiddenAt = null;
+        sendViolationToServer("visibility_return", `leftForMs:${leftFor}`);
+      }
+    };
+
+    const onBlur = () => { incrViolation("window_blur", "Window lost focus (blur)"); };
+    const onFocus = () => { sendViolationToServer("window_focus", "Window regained focus"); };
+
+    const onMouseOut = (ev: MouseEvent) => {
+      const e = ev as MouseEvent & { relatedTarget?: EventTarget | null };
+      if (!e.relatedTarget) {
+        incrViolation("mouse_leave_window", "Mouse left viewport (possible alt-tab or other window)");
+      }
+    };
+
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        incrViolation("fullscreen_exit", "User exited fullscreen");
+      } else {
+        sendViolationToServer("fullscreen_enter", "");
+      }
+    };
+
+    let lastSize = { w: window.innerWidth, h: window.innerHeight };
+    const onResize = () => {
+      const w = window.innerWidth, h = window.innerHeight;
+      const dw = Math.abs(w - lastSize.w), dh = Math.abs(h - lastSize.h);
+      lastSize = { w, h };
+      if (dw > RESIZE_THRESHOLD_PX || dh > RESIZE_THRESHOLD_PX) {
+        const now = Date.now();
+        resizeEvents.push(now);
+        resizeEvents = resizeEvents.filter((ts) => now - ts <= FAST_RESIZE_WINDOW_MS);
+        if (resizeEvents.length >= MAX_FAST_RESIZES) {
+          incrViolation("fast_resizes", `multiple large resizes (${resizeEvents.length})`);
+          resizeEvents = [];
+        } else {
+          sendViolationToServer("large_resize", `dw:${dw},dh:${dh}`);
+        }
+      }
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F12") incrViolation("devtools_key", "F12 pressed");
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "I" || e.key === "i")) incrViolation("devtools_key", "Ctrl/Cmd+Shift+I pressed");
+      if (e.key === "Tab" && e.ctrlKey) incrViolation("ctrl_tab", "Ctrl+Tab pressed (tab switch)");
+    };
+
+    const onContextMenu = (e: MouseEvent) => { incrViolation("contextmenu", "Right-click/context menu opened"); };
+    const onCopy = (e: ClipboardEvent) => { incrViolation("copy", "Copy attempted"); };
+    const onPaste = (e: ClipboardEvent) => { incrViolation("paste", "Paste attempted"); };
+
+    const onBeforeUnload = () => {
+      try {
+        const payload = JSON.stringify({ contestId, userId: user.uid, tabId, type: "unload" });
+        if (navigator.sendBeacon) navigator.sendBeacon("/api/violation", payload);
+        else {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/violation", false);
+          xhr.setRequestHeader("Content-Type", "application/json");
+          xhr.send(payload);
+        }
+      } catch (e) {}
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("mouseout", onMouseOut);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("contextmenu", onContextMenu);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    return () => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("mouseout", onMouseOut);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("contextmenu", onContextMenu);
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contestId, user]);
+
+  useEffect(() => {
+    if (!contestId || !user) return;
+    const ucDocRef = doc(db, `user_contests/${user.uid}_${contestId}`);
+    const unsub = onSnapshot(ucDocRef, (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data() as any;
+      if (data?.status === "ended") {
+        setIsContestOver(true);
+        toast({ title: "Contest ended", description: "Your contest session was ended." });
+        router.replace("/dashboard");
+      }
+    }, (err) => {
+      console.error("user_contest onSnapshot error", err);
+    });
+    return () => unsub();
+  }, [contestId, user, router, toast]);
+
   const handleRunCode = async () => {
     if (!activeQuestion || isContestOver) return;
     setIsSubmitting(true);
@@ -507,7 +768,6 @@ export default function LiveContestPage() {
     }
   };
 
-  // Submit: run all samples and compare (named params)
   const handleSubmitCode = async () => {
     if (!activeQuestion || !user || isContestOver) return;
     setIsSubmitting(true);
@@ -573,7 +833,6 @@ export default function LiveContestPage() {
         toast({ title: "✅ Correct!", description: "All test cases passed!" });
         const newSolved = [...new Set([...solved, activeQuestion.id])];
         setSolved(newSolved);
-        // persist solved locally
         saveSolvedToLocal(contestId, user?.uid, newSolved);
         if (questions.length > 0 && newSolved.length === questions.length) {
           toast({ title: "Contest Completed!", description: "All questions submitted." });
@@ -604,9 +863,37 @@ export default function LiveContestPage() {
   return (
     <div className="h-screen w-screen flex flex-col">
       <header className="flex h-16 items-center justify-between border-b px-4">
-        <h1 className="text-xl font-bold">{contest?.name}</h1>
-        {contest && <ContestTimer duration={contest.duration} contestId={contestId} userId={user?.uid} onTimeUp={handleTimeUp} />}
-      </header>
+  <div className="flex items-center gap-3">
+    <button
+      onClick={() => {
+        // navigate to /contest/[contestId] page
+        if (typeof window !== "undefined") {
+          router.push(`/contest/${contestId}`);
+        }
+      }}
+      aria-label="Back to contest page"
+      className="flex items-center gap-2 text-sm px-2 py-1 rounded hover:bg-muted transition"
+      type="button"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+      </svg>
+      <span>Back</span>
+    </button>
+
+    <h1 className="text-xl font-bold">{contest?.name}</h1>
+  </div>
+
+  {contest && (
+    <ContestTimer
+      duration={contest.duration}
+      contestId={contestId}
+      userId={user?.uid}
+      onTimeUp={handleTimeUp}
+    />
+  )}
+</header>
+
 
       <PanelGroup direction="horizontal" className="flex-grow">
         {/* Questions Panel */}
@@ -614,7 +901,6 @@ export default function LiveContestPage() {
           <div className="flex flex-col h-full">
             <h2 className="p-4 text-lg font-semibold border-b">Questions</h2>
             <ScrollArea className="flex-grow p-2">
-              {/* Render three level buckets */}
               {groupedQuestions.map((group) => (
                 <div key={group.level} className="mb-4">
                   <div className="px-2 py-1 bg-muted/50 rounded-t font-medium">Level {group.level}</div>
@@ -647,7 +933,6 @@ export default function LiveContestPage() {
                 </div>
               ))}
 
-              {/* Other questions (levels outside 1-3) */}
               {otherQuestions.length > 0 && (
                 <div className="mb-4">
                   <div className="px-2 py-1 bg-muted/50 rounded-t font-medium">Other Levels</div>
@@ -676,7 +961,6 @@ export default function LiveContestPage() {
                 </div>
               )}
 
-              {/* If no questions at all */}
               {questions.length === 0 && (
                 <div className="px-3 py-2 text-sm text-muted-foreground">No questions available for this contest.</div>
               )}
@@ -690,7 +974,6 @@ export default function LiveContestPage() {
         <Panel defaultSize={75} minSize={30}>
           {activeQuestion && (
             <PanelGroup direction="vertical" className="h-full">
-              {/* Question Details */}
               <Panel defaultSize={50}>
                 <ScrollArea className="h-full p-4">
                   <h2 className="text-2xl font-bold mb-4">{activeQuestion.title}</h2>
@@ -734,7 +1017,6 @@ export default function LiveContestPage() {
                 <div className="h-1 w-10 rounded-full bg-border" />
               </PanelResizeHandle>
 
-              {/* Editor + Output */}
               <Panel defaultSize={50}>
                 <div className="flex flex-col h-full">
                   <div className="p-2 border-b flex items-center justify-between">
@@ -781,19 +1063,32 @@ export default function LiveContestPage() {
 
                   <PanelGroup direction="vertical" className="flex-grow">
                     <Panel defaultSize={60}>
-                      <Editor
-                        height="100%"
-                        language={language}
-                        value={code}
-                        onChange={(v) => !isContestOver && setCode(v || "")}
-                        theme="vs-dark"
-                        options={{
-                          fontSize: 14,
-                          minimap: { enabled: false },
-                          automaticLayout: true,
-                          readOnly: isContestOver,
-                        }}
-                      />
+                      <div className="relative h-full">
+                        <Editor
+                          height="100%"
+                          language={language}
+                          value={code}
+                          onChange={(v) => !isContestOver && setCode(v || "")}
+                          theme="vs-dark"
+                          options={{
+                            fontSize: 14,
+                            minimap: { enabled: false },
+                            automaticLayout: true,
+                            readOnly: isContestOver,
+                          }}
+                        />
+                        {isContestOver && (
+                          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
+                            <div className="bg-white p-4 rounded shadow">
+                              <p className="font-semibold">Contest Ended</p>
+                              <p className="text-sm text-muted-foreground">You can no longer run or submit code for this contest.</p>
+                              <div className="mt-3 flex justify-end">
+                                <Button onClick={() => router.replace("/dashboard")}>Go to Dashboard</Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </Panel>
                     <PanelResizeHandle className="flex h-2 items-center justify-center bg-muted hover:bg-muted-foreground/20">
                       <div className="h-1 w-10 rounded-full bg-border" />
@@ -876,7 +1171,7 @@ export default function LiveContestPage() {
 }
 
 /* ---------------------------
-   Timer component (interactive + persists endTimestamp locally)
+   Timer component (same as your original)
    --------------------------- */
 function ContestTimer({
   duration,
