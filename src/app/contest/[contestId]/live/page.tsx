@@ -35,6 +35,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+/**
+ * Local path to the generated image you uploaded.
+ * Developer note: you asked to include the file path so it can be transformed into a URL by your tooling.
+ */
+const GENERATED_IMAGE_PATH = "/mnt/data/A_compilation_of_three_high-resolution_digital_pho.png";
+
 /* ---------------------------
    (Helpers, input parsing, code runner, etc.)
    Paste your original helper implementations here unchanged.
@@ -127,7 +133,7 @@ function solve(${params.join(", ")}) {
       .map((p, i) => `${p}: ${mapTypeToPythonHint(inputsMeta?.[i]?.type)}`)
       .join(", ");
     return `${imports}def solve(${paramHints}):
-    \"\"\"Write your solution here.\"\"\"
+    \"\"\"Write your solution here.\"\"\" 
     # write your logic here `;
   }
 
@@ -439,6 +445,39 @@ export default function LiveContestPage() {
     }
   }, []); // run once
 
+  // --- NEW: prevent Backspace navigation except when editing ---
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null) => {
+      if (!el || !(el instanceof Element)) return false;
+      const tag = el.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return true;
+      // contenteditable attribute
+      if ((el as Element).closest && (el as Element).closest("[contenteditable='true'], [contenteditable='']")) return true;
+      // Monaco editor container (allow backspace when focused inside the monaco editor)
+      if ((el as Element).closest && (el as Element).closest(".monaco-editor")) return true;
+      return false;
+    };
+
+    const onKeyDownGlobal = (e: KeyboardEvent) => {
+      // Only handle Backspace
+      if (e.key !== "Backspace") return;
+      if (isEditable(e.target)) return; // allow deletion in inputs / editor
+      // Prevent browser's default back-navigation behavior
+      e.preventDefault();
+      try {
+        toast?.({ title: "Action blocked", description: "Backspace won't navigate away during the contest." });
+      } catch {}
+    };
+
+    // use capture so we intercept before browser handles navigation
+    window.addEventListener("keydown", onKeyDownGlobal, { capture: true });
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDownGlobal, { capture: true });
+    };
+    // intentionally depends on toast so that toast is in scope
+  }, [toast]);
+
   // Heartbeat + BroadcastChannel
   useEffect(() => {
     if (!contestId || !user) return;
@@ -678,10 +717,26 @@ export default function LiveContestPage() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F12") incrViolation("devtools_key", "F12 pressed");
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "I" || e.key === "i")) incrViolation("devtools_key", "Ctrl/Cmd+Shift+I pressed");
-      if (e.key === "Tab" && e.ctrlKey) incrViolation("ctrl_tab", "Ctrl+Tab pressed (tab switch)");
-    };
+  // Developer tools
+  if (e.key === "F12") incrViolation("devtools_key", "F12 pressed");
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i")
+    incrViolation("devtools_key", "Ctrl/Cmd+Shift+I pressed");
+
+  // Tab switching
+  if (e.key === "Tab" && e.ctrlKey)
+    incrViolation("ctrl_tab", "Ctrl+Tab pressed (tab switch)");
+
+  // Detect Ctrl/Cmd + V (Paste)
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+    incrViolation("paste_key", "Ctrl/Cmd+V pressed");
+  }
+
+  // ✅ NEW: Detect Ctrl/Cmd + C (Copy)
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+    incrViolation("copy_key", "Ctrl/Cmd+C pressed");
+  }
+};
+
 
     const onContextMenu = (e: MouseEvent) => { incrViolation("contextmenu", "Right-click/context menu opened"); };
     const onCopy = (e: ClipboardEvent) => { incrViolation("copy", "Copy attempted"); };
@@ -708,8 +763,8 @@ export default function LiveContestPage() {
     window.addEventListener("resize", onResize);
     window.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("contextmenu", onContextMenu);
-    document.addEventListener("copy", onCopy);
-    document.addEventListener("paste", onPaste);
+    document.addEventListener("copy", onCopy, true);
+    document.addEventListener("paste", onPaste, true);
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
@@ -723,8 +778,8 @@ export default function LiveContestPage() {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("contextmenu", onContextMenu);
-      document.removeEventListener("copy", onCopy);
-      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("copy", onCopy, true );
+      document.removeEventListener("paste", onPaste, true);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
