@@ -366,6 +366,12 @@ export default function LiveContestPage() {
   const [isContestOver, setIsContestOver] = useState(false);
   const [testResults, setTestResults] = useState<TestResult[] | null>(null);
 
+  // NEW state: keep the total number of questions in the contest (unfiltered).
+  // This fixes the issue where the contest ends prematurely when filtering by level
+  // (because previously you compared solved.length === questions.length where `questions`
+  // was the filtered list).
+  const [totalQuestionCount, setTotalQuestionCount] = useState<number>(0);
+
   const levelOrder = [1, 2, 3];
   const groupedQuestions = levelOrder.map((lvl) => ({
     level: lvl,
@@ -402,6 +408,9 @@ export default function LiveContestPage() {
           query(collection(db, `contests/${contestId}/questions`), orderBy("level"))
         );
         const list = qSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Question[];
+
+        // *** IMPORTANT: store the total number of questions (unfiltered)
+        setTotalQuestionCount(list.length);
 
         let filtered: Question[] = list;
         if (selectedLevel !== null) {
@@ -885,11 +894,21 @@ export default function LiveContestPage() {
       });
 
       if (allPassed) {
-        toast({ title: "✅ Correct!", description: "All test cases passed!" });
-        const newSolved = [...new Set([...solved, activeQuestion.id])];
+        // --- ROBUST merge of solved list: read from localStorage, combine with state & dedupe ---
+        const persistedSolved = loadSolvedFromLocal(contestId, user?.uid) || [];
+        // combine persisted + current state + this question
+        const combined = new Set<string>([...persistedSolved, ...solved, activeQuestion.id]);
+        const newSolved = Array.from(combined);
+
+        // update state + local storage
         setSolved(newSolved);
         saveSolvedToLocal(contestId, user?.uid, newSolved);
-        if (questions.length > 0 && newSolved.length === questions.length) {
+
+        toast({ title: "✅ Correct!", description: "All test cases passed!" });
+
+        // Use totalQuestionCount (unfiltered total) to determine contest completion.
+        // Use >= to be robust to weird race/dup cases.
+        if (totalQuestionCount > 0 && newSolved.length >= totalQuestionCount) {
           toast({ title: "Contest Completed!", description: "All questions submitted." });
           await lockContest();
           router.replace("/dashboard");
