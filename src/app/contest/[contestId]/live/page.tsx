@@ -4,6 +4,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useRef } from "react";
+
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   doc,
@@ -618,181 +620,216 @@ export default function LiveContestPage() {
   }, [contestId, user]);
 
   // Proctoring listeners (re-uses sharedTabIdRef.current)
-  useEffect(() => {
-    if (!contestId || !user) return;
-    const tabId = sharedTabIdRef.current;
+  const violationCountRef = useRef<number>(0);
 
-    const MAX_VIOLATIONS = 3;
-    const RESIZE_THRESHOLD_PX = 150;
-    const MAX_FAST_RESIZES = 3;
-    const FAST_RESIZE_WINDOW_MS = 5000;
+ useEffect(() => {
+  if (!contestId || !user) return;
+  const tabId = sharedTabIdRef.current;
 
-    let violationCount = 0;
-    let lastVisibilityHiddenAt: number | null = null;
-    let resizeEvents: number[] = [];
-    let closed = false;
+  const MAX_VIOLATIONS = 3;
+  const RESIZE_THRESHOLD_PX = 150;
+  const MAX_FAST_RESIZES = 3;
+  const FAST_RESIZE_WINDOW_MS = 5000;
+  const HIDDEN_DEBOUNCE_MS = 300; // only count visibility/blur if it persists longer than this
 
-    const sendViolationToServer = async (type: string, detail?: string) => {
-      try {
-        const idToken = typeof (user as any).getIdToken === "function" ? await (user as any).getIdToken() : null;
-        await fetch("/api/violation", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
-          },
-          body: JSON.stringify({
-            contestId,
-            userId: user.uid,
-            tabId,
-            type,
-            detail,
-            ts: Date.now(),
-          }),
-          keepalive: true,
-        });
-      } catch (err) {
-        console.error("violation log failed", err);
-      }
-    };
+  // Persist key for this user+contest
+  const VIOLATION_STORAGE_KEY = `contest_violation:${contestId}:${user.uid}`;
 
-    const incrViolation = async (type: string, detail?: string) => {
-      violationCount += 1;
-      try {
-        toast({
-          title: "Suspicious activity detected",
-          description: `${type} ${violationCount >= MAX_VIOLATIONS ? "- locking contest" : `(violation ${violationCount}/${MAX_VIOLATIONS})`}`,
-        });
-      } catch {}
-      await sendViolationToServer(type, detail);
-
-      if (violationCount >= MAX_VIOLATIONS) {
-        try {
-          setIsContestOver(true);
-          await lockContest();
-        } catch (e) {
-          console.error("lockContest on violation failed", e);
-        } finally {
-          try { router.replace("/dashboard"); } catch {}
-        }
-      }
-    };
-
-    const onVisibilityChange = () => {
-      if (document.hidden) {
-        lastVisibilityHiddenAt = Date.now();
-        incrViolation("visibility_hidden", "Tab became hidden or minimized");
-      } else {
-        const leftFor = lastVisibilityHiddenAt ? Date.now() - lastVisibilityHiddenAt : 0;
-        lastVisibilityHiddenAt = null;
-        sendViolationToServer("visibility_return", `leftForMs:${leftFor}`);
-      }
-    };
-
-    const onBlur = () => { incrViolation("window_blur", "Window lost focus (blur)"); };
-    const onFocus = () => { sendViolationToServer("window_focus", "Window regained focus"); };
-
-    const onMouseOut = (ev: MouseEvent) => {
-      const e = ev as MouseEvent & { relatedTarget?: EventTarget | null };
-      if (!e.relatedTarget) {
-        incrViolation("mouse_leave_window", "Mouse left viewport (possible alt-tab or other window)");
-      }
-    };
-
-    const onFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        incrViolation("fullscreen_exit", "User exited fullscreen");
-      } else {
-        sendViolationToServer("fullscreen_enter", "");
-      }
-    };
-
-    let lastSize = { w: window.innerWidth, h: window.innerHeight };
-    const onResize = () => {
-      const w = window.innerWidth, h = window.innerHeight;
-      const dw = Math.abs(w - lastSize.w), dh = Math.abs(h - lastSize.h);
-      lastSize = { w, h };
-      if (dw > RESIZE_THRESHOLD_PX || dh > RESIZE_THRESHOLD_PX) {
-        const now = Date.now();
-        resizeEvents.push(now);
-        resizeEvents = resizeEvents.filter((ts) => now - ts <= FAST_RESIZE_WINDOW_MS);
-        if (resizeEvents.length >= MAX_FAST_RESIZES) {
-          incrViolation("fast_resizes", `multiple large resizes (${resizeEvents.length})`);
-          resizeEvents = [];
-        } else {
-          sendViolationToServer("large_resize", `dw:${dw},dh:${dh}`);
-        }
-      }
-    };
-
-    const onKeyDown = (e: KeyboardEvent) => {
-  // Developer tools
-  if (e.key === "F12") incrViolation("devtools_key", "F12 pressed");
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i")
-    incrViolation("devtools_key", "Ctrl/Cmd+Shift+I pressed");
-
-  // Tab switching
-  if (e.key === "Tab" && e.ctrlKey)
-    incrViolation("ctrl_tab", "Ctrl+Tab pressed (tab switch)");
-
-  // Detect Ctrl/Cmd + V (Paste)
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
-    incrViolation("paste_key", "Ctrl/Cmd+V pressed");
+  // restore persisted count (if any) into violationCountRef
+  try {
+    const raw = localStorage.getItem(VIOLATION_STORAGE_KEY);
+    if (raw) {
+      const n = Number(raw);
+      if (!Number.isNaN(n) && n >= 0) violationCountRef.current = n;
+    }
+  } catch (e) {
+    // ignore localStorage read errors
   }
 
-  // ✅ NEW: Detect Ctrl/Cmd + C (Copy)
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
-    incrViolation("copy_key", "Ctrl/Cmd+C pressed");
-  }
-};
+  let lastVisibilityHiddenAt: number | null = null;
+  let hiddenTimer: number | null = null;
+  let resizeEvents: number[] = [];
+  let closed = false;
 
+  const persistViolationCount = (n: number) => {
+    try { localStorage.setItem(VIOLATION_STORAGE_KEY, String(n)); } catch {}
+  };
 
-    const onContextMenu = (e: MouseEvent) => { incrViolation("contextmenu", "Right-click/context menu opened"); };
-    const onCopy = (e: ClipboardEvent) => { incrViolation("copy", "Copy attempted"); };
-    const onPaste = (e: ClipboardEvent) => { incrViolation("paste", "Paste attempted"); };
+  const clearPersistedViolationCount = () => {
+    try { localStorage.removeItem(VIOLATION_STORAGE_KEY); } catch {}
+  };
 
-    const onBeforeUnload = () => {
+  const sendViolationToServer = async (type: string, detail?: string) => {
+    try {
+      const idToken = typeof (user as any).getIdToken === "function" ? await (user as any).getIdToken() : null;
+      await fetch("/api/violation", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          contestId,
+          userId: user.uid,
+          tabId,
+          type,
+          detail,
+          ts: Date.now(),
+        }),
+        keepalive: true,
+      });
+    } catch (err) {
+      console.error("violation log failed", err);
+    }
+  };
+
+  const incrViolation = async (type: string, detail?: string) => {
+    violationCountRef.current += 1;
+    persistViolationCount(violationCountRef.current);
+
+    try {
+      toast({
+        title: "Suspicious activity detected",
+        description: `${type} ${
+          violationCountRef.current >= MAX_VIOLATIONS ? "- locking contest" : `(violation ${violationCountRef.current}/${MAX_VIOLATIONS})`
+        }`,
+      });
+    } catch {}
+
+    await sendViolationToServer(type, detail);
+
+    if (violationCountRef.current >= MAX_VIOLATIONS) {
       try {
-        const payload = JSON.stringify({ contestId, userId: user.uid, tabId, type: "unload" });
-        if (navigator.sendBeacon) navigator.sendBeacon("/api/violation", payload);
-        else {
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", "/api/violation", false);
-          xhr.setRequestHeader("Content-Type", "application/json");
-          xhr.send(payload);
+        setIsContestOver(true);
+        await lockContest();
+      } catch (e) {
+        console.error("lockContest on violation failed", e);
+      } finally {
+        // clear persisted count after locking so next session starts fresh
+        clearPersistedViolationCount();
+        try { router.replace("/dashboard"); } catch {}
+      }
+    }
+  };
+
+  // Visibility: debounce to avoid reacting to tiny transient changes
+  const onVisibilityChange = () => {
+    if (document.hidden) {
+      lastVisibilityHiddenAt = Date.now();
+      if (hiddenTimer) window.clearTimeout(hiddenTimer);
+      hiddenTimer = window.setTimeout(() => {
+        if (document.hidden) {
+          // user stayed away long enough -> treat as tab switch / hidden
+          incrViolation("visibility_hidden", "Tab became hidden or user switched tab/window");
         }
-      } catch (e) {}
-    };
+        hiddenTimer = null;
+      }, HIDDEN_DEBOUNCE_MS);
+    } else {
+      if (hiddenTimer) {
+        // returned quickly -> cancel
+        window.clearTimeout(hiddenTimer);
+        hiddenTimer = null;
+      }
+      const leftFor = lastVisibilityHiddenAt ? Date.now() - lastVisibilityHiddenAt : 0;
+      lastVisibilityHiddenAt = null;
+      sendViolationToServer("visibility_return", `leftForMs:${leftFor}`);
+    }
+  };
 
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("mouseout", onMouseOut);
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    window.addEventListener("resize", onResize);
-    window.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("contextmenu", onContextMenu);
-    document.addEventListener("copy", onCopy, true);
-    document.addEventListener("paste", onPaste, true);
-    window.addEventListener("beforeunload", onBeforeUnload);
+  // Blur: only count as violation if it persists (debounced)
+  const onBlur = () => {
+    if (hiddenTimer) window.clearTimeout(hiddenTimer);
+    hiddenTimer = window.setTimeout(() => {
+      // still blurred/hidden -> treat as potential tab switch
+      if (document.hidden || !document.hasFocus()) {
+        incrViolation("window_blur_hidden", "Window blurred and not focused (likely tab switch)");
+      }
+      hiddenTimer = null;
+    }, HIDDEN_DEBOUNCE_MS);
+  };
 
-    return () => {
-      if (closed) return;
-      closed = true;
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("mouseout", onMouseOut);
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("keydown", onKeyDown, true);
-      document.removeEventListener("contextmenu", onContextMenu);
-      document.removeEventListener("copy", onCopy, true );
-      document.removeEventListener("paste", onPaste, true);
-      window.removeEventListener("beforeunload", onBeforeUnload);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contestId, user]);
+  const onFocus = () => {
+    if (hiddenTimer) {
+      window.clearTimeout(hiddenTimer);
+      hiddenTimer = null;
+    }
+    sendViolationToServer("window_focus", "Window regained focus");
+  };
+
+  // Resize detection (large fast resizes)
+  let lastSize = { w: window.innerWidth, h: window.innerHeight };
+  const onResize = () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    const dw = Math.abs(w - lastSize.w), dh = Math.abs(h - lastSize.h);
+    lastSize = { w, h };
+    if (dw > RESIZE_THRESHOLD_PX || dh > RESIZE_THRESHOLD_PX) {
+      const now = Date.now();
+      resizeEvents.push(now);
+      resizeEvents = resizeEvents.filter((ts) => now - ts <= FAST_RESIZE_WINDOW_MS);
+      if (resizeEvents.length >= MAX_FAST_RESIZES) {
+        incrViolation("fast_resizes", `multiple large resizes (${resizeEvents.length})`);
+        resizeEvents = [];
+      } else {
+        sendViolationToServer("large_resize", `dw:${dw},dh:${dh}`);
+      }
+    }
+  };
+
+  // Key captures (devtools, ctrl-tab, copy/paste via keyboard)
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "F12") incrViolation("devtools_key", "F12 pressed");
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i")
+      incrViolation("devtools_key", "Ctrl/Cmd+Shift+I pressed");
+    if (e.key === "Tab" && e.ctrlKey) incrViolation("ctrl_tab", "Ctrl+Tab pressed (tab switch)");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") incrViolation("paste_key", "Ctrl/Cmd+V pressed");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") incrViolation("copy_key", "Ctrl/Cmd+C pressed");
+  };
+
+  // Clipboard events: copy/paste attempts
+  const onCopy = (e: ClipboardEvent) => { incrViolation("copy", "Copy attempted"); };
+  const onPaste = (e: ClipboardEvent) => { incrViolation("paste", "Paste attempted"); };
+
+  // beforeunload: beacon the server that user left
+  const onBeforeUnload = () => {
+    try {
+      const payload = JSON.stringify({ contestId, userId: user.uid, tabId, type: "unload" });
+      if (navigator.sendBeacon) navigator.sendBeacon("/api/violation", payload);
+      else {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/violation", false);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send(payload);
+      }
+    } catch (e) {}
+  };
+
+  // NOTE: removed mouseout and contextmenu (right click) listeners to avoid false positives.
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("blur", onBlur);
+  window.addEventListener("focus", onFocus);
+  window.addEventListener("resize", onResize);
+  window.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("copy", onCopy, true);
+  document.addEventListener("paste", onPaste, true);
+  window.addEventListener("beforeunload", onBeforeUnload);
+
+  return () => {
+    if (closed) return;
+    closed = true;
+    if (hiddenTimer) window.clearTimeout(hiddenTimer);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("focus", onFocus);
+    window.removeEventListener("resize", onResize);
+    window.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("copy", onCopy, true);
+    document.removeEventListener("paste", onPaste, true);
+    window.removeEventListener("beforeunload", onBeforeUnload);
+    // persist final count on cleanup
+    try { localStorage.setItem(VIOLATION_STORAGE_KEY, String(violationCountRef.current)); } catch {}
+  };
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [contestId, user]);
 
   useEffect(() => {
     if (!contestId || !user) return;
