@@ -44,7 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PlusCircle, Trash2, Loader2, X } from "lucide-react";
+import { PlusCircle, Trash2, Loader2, X, Edit2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
@@ -100,6 +100,110 @@ export default function ContestsPage() {
   const [editStartAt, setEditStartAt] = useState<string | null>(null);
   const [editEndAt, setEditEndAt] = useState<string | null>(null);
 
+  // ---------- Question Editor (single-question edit modal) ----------
+  const [questionEditorOpen, setQuestionEditorOpen] = useState(false);
+  const [editorQuestionIndex, setEditorQuestionIndex] = useState<number | null>(null);
+  const [editorMode, setEditorMode] = useState<"create" | "edit">("create"); // which array we edit
+  const [editorQuestion, setEditorQuestion] = useState<NewQuestion | null>(null);
+
+  const openQuestionEditorForCreate = (index: number) => {
+    setEditorMode("create");
+    setEditorQuestionIndex(index);
+    setEditorQuestion({ ...(questions[index] || {}) });
+    setQuestionEditorOpen(true);
+  };
+
+  const openQuestionEditorForEdit = (index: number) => {
+    setEditorMode("edit");
+    setEditorQuestionIndex(index);
+    setEditorQuestion({ ...(editQuestions[index] || {}) });
+    setQuestionEditorOpen(true);
+  };
+
+  const closeQuestionEditor = () => {
+    setQuestionEditorOpen(false);
+    setEditorQuestionIndex(null);
+    setEditorQuestion(null);
+  };
+
+  const handleEditorFieldChange = (field: keyof NewQuestion, value: any) => {
+    setEditorQuestion((prev) => (prev ? { ...prev, [field]: value } : prev));
+  };
+
+  // Editor helpers for inputs and samples (local to editor)
+  const editorAddInput = () => {
+    setEditorQuestion((prev) =>
+      prev
+        ? { ...prev, inputs: [...(prev.inputs || []), { name: "", type: "int", example: "" }] }
+        : prev
+    );
+  };
+  const editorRemoveInput = (i: number) => {
+    setEditorQuestion((prev) =>
+      prev ? { ...prev, inputs: (prev.inputs || []).filter((_, idx) => idx !== i) } : prev
+    );
+  };
+  const editorChangeInput = (i: number, field: keyof QuestionInput, value: any) => {
+    setEditorQuestion((prev) => {
+      if (!prev) return prev;
+      const inputs = [...(prev.inputs || [])];
+      inputs[i] = { ...inputs[i], [field]: value };
+      return { ...prev, inputs };
+    });
+  };
+
+  const editorAddSamplePair = () => {
+    setEditorQuestion((prev) =>
+      prev
+        ? {
+            ...prev,
+            sampleInputs: [...(prev.sampleInputs || []), ""],
+            sampleOutputs: [...(prev.sampleOutputs || []), ""],
+          }
+        : prev
+    );
+  };
+  const editorRemoveSamplePair = (i: number) => {
+    setEditorQuestion((prev) =>
+      prev
+        ? {
+            ...prev,
+            sampleInputs: (prev.sampleInputs || []).filter((_, idx) => idx !== i),
+            sampleOutputs: (prev.sampleOutputs || []).filter((_, idx) => idx !== i),
+          }
+        : prev
+    );
+  };
+  const editorChangeSampleInput = (i: number, value: string) => {
+    setEditorQuestion((prev) =>
+      prev ? { ...prev, sampleInputs: (prev.sampleInputs || []).map((v, idx) => (idx === i ? value : v)) } : prev
+    );
+  };
+  const editorChangeSampleOutput = (i: number, value: string) => {
+    setEditorQuestion((prev) =>
+      prev ? { ...prev, sampleOutputs: (prev.sampleOutputs || []).map((v, idx) => (idx === i ? value : v)) } : prev
+    );
+  };
+
+  const saveEditorChanges = () => {
+    if (editorQuestionIndex == null || !editorQuestion) {
+      closeQuestionEditor();
+      return;
+    }
+    if (editorMode === "create") {
+      const updated = [...questions];
+      updated[editorQuestionIndex] = editorQuestion;
+      setQuestions(updated);
+    } else {
+      const updated = [...editQuestions];
+      updated[editorQuestionIndex] = editorQuestion;
+      setEditQuestions(updated);
+    }
+    closeQuestionEditor();
+  };
+
+  // ---------- end Question Editor ----------
+
   const fetchContests = async () => {
     setIsLoading(true);
     try {
@@ -109,6 +213,7 @@ export default function ContestsPage() {
         ...docSnap.data(),
       })) as Contest[];
       setContests(contestsList);
+      console.log("Fetched contests:", contestsList);
     } catch (error) {
       console.error("Error fetching contests:", error);
       toast({
@@ -176,7 +281,7 @@ export default function ContestsPage() {
   // Inputs management (create)
   const handleAddInput = (qIndex: number) => {
     const updated = [...questions];
-    const q = { ...(updated[qIndex] || {} as NewQuestion) };
+    const q = { ...(updated[qIndex] || ({} as NewQuestion)) };
     q.inputs = q.inputs ? [...q.inputs, { name: "", type: "int", example: "" }] : [{ name: "", type: "int", example: "" }];
     updated[qIndex] = q;
     setQuestions(updated);
@@ -420,7 +525,7 @@ export default function ContestsPage() {
 
   const handleEditAddInput = (qIndex: number) => {
     const updated = [...editQuestions];
-    const q = { ...(updated[qIndex] || {} as NewQuestion) };
+    const q = { ...(updated[qIndex] || ({} as NewQuestion)) };
     q.inputs = q.inputs ? [...q.inputs, { name: "", type: "int", example: "" }] : [{ name: "", type: "int", example: "" }];
     updated[qIndex] = q;
     setEditQuestions(updated);
@@ -618,9 +723,14 @@ export default function ContestsPage() {
                 <h3 className="font-semibold text-lg">Questions</h3>
                 {questions.map((q, index) => (
                   <div key={index} className="border rounded-lg p-4 space-y-4 relative">
-                    <Button variant="ghost" size="icon" className="absolute top-2 right-2" onClick={() => handleRemoveQuestion(index)}>
-                      <X className="h-4 w-4" />
-                    </Button>
+                    <div className="absolute top-2 right-2 flex items-center space-x-1">
+                      <Button variant="ghost" size="icon" onClick={() => openQuestionEditorForCreate(index)} title="Edit Question">
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleRemoveQuestion(index)}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-2 col-span-2">
@@ -762,14 +872,19 @@ export default function ContestsPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end items-center space-x-2">
-                      {canEdit(contest) && (
-                        <Button variant="ghost" size="icon" onClick={() => openEditDialog(contest)} disabled={isLoading} title="Edit Contest">
-                          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"></path>
-                            <path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"></path>
-                          </svg>
-                        </Button>
-                      )}
+                      {/* TEMP VISIBLE EDIT BUTTON — makes it obvious during debugging */}
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          console.log("openEditDialog called", { user, contest });
+                          openEditDialog(contest);
+                        }}
+                        disabled={isLoading}
+                        title="Edit Contest (temp visible)"
+                      >
+                        <Edit2 className="mr-2 h-4 w-4" />
+                        Edit
+                      </Button>
 
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
@@ -848,9 +963,14 @@ export default function ContestsPage() {
 
               {editQuestions.map((q, index) => (
                 <div key={index} className="border rounded-lg p-4 space-y-4 relative">
-                  <Button variant="ghost" size="icon" className="absolute top-2 right-2" onClick={() => handleEditRemoveQuestion(index)}>
-                    <X className="h-4 w-4" />
-                  </Button>
+                  <div className="absolute top-2 right-2 flex items-center space-x-1">
+                    <Button variant="ghost" size="icon" onClick={() => openQuestionEditorForEdit(index)} title="Edit Question">
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => handleEditRemoveQuestion(index)}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-2 col-span-2">
@@ -958,6 +1078,117 @@ export default function ContestsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ---------------- Question Editor Modal ---------------- */}
+      <Dialog open={questionEditorOpen} onOpenChange={(open) => { if (!open) closeQuestionEditor(); setQuestionEditorOpen(open); }}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Question Editor</DialogTitle>
+            <DialogDescription>Edit a single question's details, inputs and sample I/O pairs.</DialogDescription>
+          </DialogHeader>
+
+          {editorQuestion ? (
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="md:col-span-2 space-y-2">
+                  <Label>Title</Label>
+                  <Input value={editorQuestion.title} onChange={(e) => handleEditorFieldChange("title", e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Level</Label>
+                  <Select value={editorQuestion.level?.toString() ?? "1"} onValueChange={(val) => handleEditorFieldChange("level", parseInt(val))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Level" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1 - Easy</SelectItem>
+                      <SelectItem value="2">2 - Medium</SelectItem>
+                      <SelectItem value="3">3 - Hard</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div>
+                <Label>Problem Description</Label>
+                <Textarea value={editorQuestion.description} onChange={(e) => handleEditorFieldChange("description", e.target.value)} />
+              </div>
+
+              <div>
+                <Label>Constraints</Label>
+                <Textarea value={editorQuestion.constraints} onChange={(e) => handleEditorFieldChange("constraints", e.target.value)} />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">Inputs</h4>
+                  <Button variant="outline" size="sm" onClick={editorAddInput}>Add Input</Button>
+                </div>
+
+                {(editorQuestion.inputs || []).map((inp, ii) => (
+                  <div key={ii} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end mt-2">
+                    <div className="md:col-span-2">
+                      <Label>Variable Name</Label>
+                      <Input value={inp.name} onChange={(e) => editorChangeInput(ii, "name", e.target.value)} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label>Type</Label>
+                      <Select value={inp.type} onValueChange={(val) => editorChangeInput(ii, "type", val as any)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="int">int</SelectItem>
+                          <SelectItem value="string">string</SelectItem>
+                          <SelectItem value="array">array</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label>Example Value</Label>
+                      <Input value={inp.example} onChange={(e) => editorChangeInput(ii, "example", e.target.value)} placeholder={inp.type === "array" ? "e.g. 1,2,3" : "e.g. 42 or hello"} />
+                    </div>
+                    <div className="md:col-span-6 text-right">
+                      <Button variant="ghost" size="icon" onClick={() => editorRemoveInput(ii)}><X className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">Sample Inputs & Outputs</h4>
+                  <Button variant="outline" size="sm" onClick={editorAddSamplePair}>Add Sample IO</Button>
+                </div>
+
+                {(editorQuestion.sampleInputs || []).map((si, sidx) => (
+                  <div key={sidx} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                    <div>
+                      <Label>Sample Input #{sidx + 1}</Label>
+                      <Textarea value={si} onChange={(e) => editorChangeSampleInput(sidx, e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Sample Output #{sidx + 1}</Label>
+                      <Textarea value={(editorQuestion.sampleOutputs || [])[sidx] || ""} onChange={(e) => editorChangeSampleOutput(sidx, e.target.value)} />
+                    </div>
+                    <div className="md:col-span-2 text-right">
+                      <Button variant="ghost" size="icon" onClick={() => editorRemoveSamplePair(sidx)}><X className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center">No question loaded.</div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeQuestionEditor}>Cancel</Button>
+            <Button onClick={saveEditorChanges}>Save Question</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* --------------------------------------------------------- */}
     </div>
   );
 }
