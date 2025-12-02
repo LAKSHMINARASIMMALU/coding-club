@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { useState } from "react";
 
@@ -33,9 +33,6 @@ import { useRouter } from "next/navigation";
 
 const departments = ["CSE", "ECE", "AI&DS", "EEE", "MECH", "CIVIL"];
 
-/**
- * Schema: regNo must be at least 5 characters AND start with "4207".
- */
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
   regNo: z
@@ -59,37 +56,60 @@ export default function RegisterPage() {
       regNo: "",
       email: "",
       password: "",
-      department: departments[0], // set sensible default to avoid uncontrolled warnings
+      department: departments[0],
     },
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsLoading(true);
     try {
+      // 1) Create authenticated user
       const userCredential = await createUserWithEmailAndPassword(auth, values.email, values.password);
       const user = userCredential.user;
+      console.log("Auth created uid=", user.uid);
 
-      // Store additional user info in Firestore
-      await setDoc(doc(db, "users", user.uid), {
-        uid: user.uid,
+      // 2) Force ID token refresh (useful if you use custom claims)
+      await user.getIdToken(true);
+
+      // 3) Prepare user doc and write to Firestore
+      const userRef = doc(db, "users", user.uid);
+      const userData = {
+        userId: user.uid,
         name: values.name,
         regNo: values.regNo,
         department: values.department,
         email: values.email,
-        role: "user", // Default role
-      });
+        role: "user",
+        createdAt: serverTimestamp(),
+      };
+
+      await setDoc(userRef, userData);
+      console.log("Firestore user document created:", userRef.path);
 
       toast({
         title: "Registration Successful",
         description: "Your account has been created. Redirecting...",
       });
-      router.push('/dashboard');
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Registration Failed",
-        description: error?.message || "An unknown error occurred.",
-      });
+
+      // redirect to dashboard (adjust path as needed)
+      router.push("/dashboard");
+    } catch (err: any) {
+      console.error("Registration error full:", err);
+
+      // If permissions error, show helpful message
+      if (err?.code === "permission-denied" || (err?.message && err.message.toLowerCase().includes("permission"))) {
+        toast({
+          variant: "destructive",
+          title: "Registration Failed",
+          description: "Missing or insufficient permissions. Check Firestore rules & projectId.",
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Registration Failed",
+          description: err?.message || "An unknown error occurred.",
+        });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -99,11 +119,12 @@ export default function RegisterPage() {
     <Card className="w-full max-w-md shadow-2xl">
       <CardHeader className="text-center">
         <div className="mx-auto mb-4 flex items-center justify-center w-16 h-16 rounded-full bg-primary text-primary-foreground">
-            <Code2 className="w-8 h-8" />
+          <Code2 className="w-8 h-8" />
         </div>
         <CardTitle className="text-3xl font-headline">Create an Account</CardTitle>
         <CardDescription>Join CodeContest Arena today!</CardDescription>
       </CardHeader>
+
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -120,6 +141,7 @@ export default function RegisterPage() {
                 </FormItem>
               )}
             />
+
             <FormField
               control={form.control}
               name="regNo"
@@ -133,6 +155,7 @@ export default function RegisterPage() {
                 </FormItem>
               )}
             />
+
             <FormField
               control={form.control}
               name="department"
@@ -157,6 +180,7 @@ export default function RegisterPage() {
                 </FormItem>
               )}
             />
+
             <FormField
               control={form.control}
               name="email"
@@ -170,6 +194,7 @@ export default function RegisterPage() {
                 </FormItem>
               )}
             />
+
             <FormField
               control={form.control}
               name="password"
@@ -183,12 +208,14 @@ export default function RegisterPage() {
                 </FormItem>
               )}
             />
+
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create Account
             </Button>
           </form>
         </Form>
+
         <div className="mt-6 text-center text-sm">
           Already have an account?{" "}
           <Link href="/login" className="font-medium text-primary hover:underline">
