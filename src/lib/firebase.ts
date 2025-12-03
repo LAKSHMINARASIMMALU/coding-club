@@ -5,6 +5,7 @@ import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAnalytics, isSupported } from "firebase/analytics";
 
+// --- Firebase configuration ---
 const firebaseConfig = {
   apiKey: "AIzaSyDpNwXCUm--q-o_lhcun3612NjMc6g-w-4",
   authDomain: "coding-clun.firebaseapp.com",
@@ -15,21 +16,23 @@ const firebaseConfig = {
   measurementId: "G-GB0PYS28LR"
 };
 
-// Initialize only once (Next.js hot reload safe)
+// --- Initialize Firebase (safe for Next.js hot reload) ---
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
-
-// Optional analytics (only runs in browser if supported)
-export let analytics: ReturnType<typeof getAnalytics> | null = null;
+// --- Initialize analytics only on the client (optional) ---
+let analytics: ReturnType<typeof getAnalytics> | null = null;
 if (typeof window !== "undefined") {
-  isSupported().then((ok) => {
-    if (ok) analytics = getAnalytics(app);
-  }).catch(() => {
-    analytics = null;
+  isSupported().then((yes) => {
+    if (yes) analytics = getAnalytics(app);
   });
 }
 
-export default app;
+export { app, auth, db, storage, analytics };
+
+
+
+
+
