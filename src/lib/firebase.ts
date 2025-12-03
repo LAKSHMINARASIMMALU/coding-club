@@ -6,13 +6,13 @@ import { getStorage } from "firebase/storage";
 import { getAnalytics, isSupported } from "firebase/analytics";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB_tHEpvzOX7VDtMgiPw06OU0TreGtQ2ig",
-  authDomain: "coding-club-ee7c3.firebaseapp.com",
-  projectId: "coding-club-ee7c3",
-  storageBucket: "coding-club-ee7c3.firebasestorage.app",
-  messagingSenderId: "1029326574504",
-  appId: "1:1029326574504:web:e2a3880534ed106bbf039d",
-  measurementId: "G-2MGDWHB62Y"
+  apiKey: "AIzaSyDpNwXCUm--q-o_lhcun3612NjMc6g-w-4",
+  authDomain: "coding-clun.firebaseapp.com",
+  projectId: "coding-clun",
+  storageBucket: "coding-clun.firebasestorage.app",
+  messagingSenderId: "907071459068",
+  appId: "1:907071459068:web:cb151c932a85c2009f5179",
+  measurementId: "G-GB0PYS28LR"
 };
 
 // Initialize only once (Next.js hot reload safe)
